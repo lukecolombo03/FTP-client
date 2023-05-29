@@ -1,10 +1,9 @@
-username: colombol 
-password: KUCyvPmtiGHOhFZA5V37
-host: ftp://ftp.3700.network
-port: 21
-ftp://colombol:KUCyvPmtiGHOhFZA5V37@ftp.3700.network:21/
+# Project 2 Networks & Distributed Systems, January 2023
+## Description
+This project is to implement File Transfer Protocol (FTP) in a client that runs on the command line. 
+This client can perform operations like list, make directory, remove, remove directory, copy, and move.
 
-
+## Approach
 My program starts by parsing the command-line arguments to get the username, password, host, port,
 and path from the ftp url. It then connects the control channel to the server, and has short if
 else statements for mkdir, rmdir, and rm (which don't require the data channel at all). If the
