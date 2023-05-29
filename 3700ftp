@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+import socket
+import argparse
+from urllib.parse import urlparse
+import os
+
+parser = argparse.ArgumentParser(description="File Transfer Protocol client.")
+parser.add_argument('operation', nargs=1, help="Valid operations are: ls, mkdir, rm, rmdir, cp, mv")
+parser.add_argument('params', nargs='+', help="Parameters for the given operation. Will be one or "
+                                              "two file paths and/or URLs")
+
+args = parser.parse_args()
+operation = vars(args)['operation'][0]
+params = vars(args)['params']
+param_one = params[0]
+param_two = ""
+if len(params) == 2:
+    param_two = params[1]
+
+# figure out which is the filepath and which is the ftp url (if there are two params)
+remote_url_param = param_one
+local_path_param = ""
+if len(params) == 2:
+    # if first param ISN'T ftp, then it's the local path and the second one is the ftp url
+    if param_one[0:3] != "ftp":
+        remote_url_param = param_two
+        local_path_param = param_one
+
+# now that we have identified which param is the ftp url, parse it
+global username
+global password
+global host
+global port
+global ftp_path
+if urlparse(remote_url_param).username is None:
+    username = 'anonymous'
+    password = None
+else:
+    username = urlparse(remote_url_param).username
+    password = urlparse(remote_url_param).password
+if urlparse(remote_url_param).port is None:
+    port = 21
+else:
+    port = urlparse(remote_url_param).port
+
+# these are the only two required fields in the ftp url
+host = urlparse(remote_url_param).hostname
+ftp_path = urlparse(remote_url_param).path
+
+# get the path of the source file (from param_one), and the destination path (from param_two)
+print(username, password, host, port, ftp_path)
+print(os.path.split(ftp_path))
+
+global control_channel
+control_channel = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+global data_channel
+data_channel = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+
+def main():
+    global control_channel
+    control_channel.connect((host, port))
+    received = control_channel.recv(4096)
+    print(received)  # this should be the hello message
+    login()
+
+    # 'mkdir', 'rmdir', and 'rm' all have one param and don't require the data channel
+    if operation == "mkdir":
+        control_channel.sendall(("MKD " + ftp_path + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+    elif operation == "rmdir":
+        control_channel.sendall(("RMD " + ftp_path + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+    elif operation == "rm":
+        control_channel.sendall(("DELE " + ftp_path + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+    else:  # DOES require the data channel
+        data_chan_operations()
+    quit_msg()
+
+
+# login to the server and makes sure the modes are set correctly
+def login():
+    global control_channel
+    username_local = b"USER " + username.encode()
+    password_local = b"PASS " + password.encode()
+    binary_mode = b"TYPE I"
+    stream_mode = b"MODE S"
+    file_mode = b"STRU F"
+    set_up = [username_local, password_local, binary_mode, stream_mode, file_mode]
+    for x in set_up:
+        control_channel.sendall(x + b"\r\n")
+        print(control_channel.recv(4096).decode())
+
+
+def quit_msg():
+    global control_channel
+    control_channel.sendall(b"QUIT\r\n")
+    print(control_channel.recv(4096).decode())
+    control_channel.close()
+
+
+# parses the received PASV message to extract the ip address and port number, then connects the data
+# socket accordingly
+def connect_data_chan():
+    global data_channel
+    global control_channel
+    control_channel.sendall(b"PASV\r\n")
+    pasv_msg = control_channel.recv(4096)  # this is the 227 entering passive mode message
+    print(pasv_msg.decode())
+    ip_and_port = pasv_msg.decode()[27:-4].split(",")
+    ip_as_list = ip_and_port[0:4]  # list of 6 numbers: first 4 are ip, last 2 are port
+    ip = ""
+    for x in ip_as_list:  # format this as an ip address like 00.00.00.00
+        if x == ip_as_list[-1]:
+            ip = ip + x
+        else:
+            ip = ip + x + "."
+    port_top_bits = ip_and_port[-2]
+    port_bottom_bits = ip_and_port[-1]
+    port_num = (int(port_top_bits) << 8) + int(port_bottom_bits)
+    data_channel.connect((ip, port_num))
+
+
+def data_chan_operations():
+    global data_channel
+    global control_channel
+    # copy and move have helper functions because they're a little more elaborate
+    if operation == "ls":
+        connect_data_chan()
+        control_channel.sendall(("LIST " + ftp_path + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+        print(data_channel.recv(4096).decode())
+    elif operation == "cp":
+        copy_or_move(False)
+    elif operation == "mv":
+        copy_or_move(True)
+    else:
+        print('operation not recognized')
+
+
+# the boolean parameter is TRUE for move, FALSE for copy
+def copy_or_move(boolean):
+    # Source: local host
+    # Dest: ftp server
+    # 1. delete old remote file (if it's a file and not a directory)
+    # 2. get data from new local file
+    # 3. send data to remote destination over the data channel
+    # 4. if move, then delete old local file
+    if param_two[0:3] == "ftp":
+        old_file_name = os.path.split(param_one)[1]
+        dest_path = os.path.split(ftp_path)[0]
+        # 1
+        control_channel.sendall(("DELE " + dest_path + old_file_name + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+        # 2
+        file = open(param_one, "rb")    # param_one will be the absolute path of the local file
+        data = file.read()
+        # 3
+        connect_data_chan()
+        control_channel.sendall(("STOR " + dest_path + "/" + old_file_name + "\r\n").encode())
+        print(control_channel.recv(4096).decode())
+        data_channel.sendall(data)
+        data_channel.close()
+        # 4
+        if boolean:
+            os.remove(param_one)
+    # Source: ftp server
+    # Dest: local host
+    # 1. delete old local file (if it's a file and not a directory)
+    # 2. get data from new remote file
+    # 3. write data to new local file
+    # 4. if move, then delete old remote file
+    elif param_one[0:3] == "ftp":
+        old_file_name = os.path.split(ftp_path)[1]
+        dest_path = os.path.split(param_two)[0]    # param_two minus the file name
+        new_file_name = os.path.split(param_two)[1]   # will be "" if we're copying to a directory
+        # 1
+        # don't delete if we're copying to a directory or if the path doesn't exist
+        if os.path.exists(param_two) and (new_file_name != ""):
+            os.remove(param_two)
+            print("removed old file " + param_two)
+        # 2, 3
+        connect_data_chan()
+        control_channel.sendall(("RETR " + ftp_path + "\r\n").encode())
+        if new_file_name == "":     # we're copying to a directory
+            new_file = open(dest_path + "/" + old_file_name, "wb")
+        else:                       # we're copying to a file
+            new_file = open(param_two, "wb")
+        while True:     # read from data socket and write to new file in the same loop
+            data = data_channel.recv(4096)
+            if data == b'':
+                break
+            new_file.write(data)
+        # 4
+        if boolean:
+            control_channel.sendall(("DELE " + ftp_path + "\r\n").encode())
+            print(control_channel.recv(4096).decode())
+    else:
+        print("must copy from a local host to a remote server, or vice-versa")
+
+
+main()
