@@ -1,7 +1,6 @@
-# Project 2 Networks & Distributed Systems, January 2023
+# Project 2 for CS3700, January 2023
 ## Description
-This project is to implement File Transfer Protocol (FTP) in a client that runs on the command line. 
-This client can perform operations like list, make directory, remove, remove directory, copy, and move.
+This project is to implement File Transfer Protocol (FTP) in a client that runs on the command line. FTP is a pre-HTTP, pre-Internet protocol for transferring files that is quite simple. This client can perform operations like list, make directory, remove, remove directory, copy, and move, and required two sockets—a command socket and a data socket.
 
 ## Approach
 My program starts by parsing the command-line arguments to get the username, password, host, port,
